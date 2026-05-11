@@ -3,8 +3,6 @@ class OrdenTrabajo {
   final String vehiculoId;
   final String descripcion;
   final String estado; // 'pendiente', 'en_progreso', 'completada'
-  final double? costoManoObra;
-  final double? costoTotal;
   final DateTime? fechaIngreso;
   final DateTime? fechaEntrega;
   final DateTime? createdAt;
@@ -14,8 +12,6 @@ class OrdenTrabajo {
     required this.vehiculoId,
     required this.descripcion,
     this.estado = 'pendiente',
-    this.costoManoObra,
-    this.costoTotal,
     this.fechaIngreso,
     this.fechaEntrega,
     this.createdAt,
@@ -27,8 +23,6 @@ class OrdenTrabajo {
       vehiculoId: json['vehiculo_id'] ?? '',
       descripcion: json['descripcion'] ?? '',
       estado: json['estado'] ?? 'pendiente',
-      costoManoObra: json['costo_mano_obra']?.toDouble(),
-      costoTotal: json['costo_total']?.toDouble(),
       fechaIngreso: json['fecha_ingreso'] != null
           ? DateTime.parse(json['fecha_ingreso'])
           : null,
@@ -46,8 +40,6 @@ class OrdenTrabajo {
       'vehiculo_id': vehiculoId,
       'descripcion': descripcion,
       'estado': estado,
-      'costo_mano_obra': costoManoObra,
-      'costo_total': costoTotal,
       'fecha_ingreso': fechaIngreso?.toIso8601String(),
       'fecha_entrega': fechaEntrega?.toIso8601String(),
     };

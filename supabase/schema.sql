@@ -1,0 +1,1 @@
+-- Supabase schema placeholder\n-- Define tables: clientes, vehiculos, ordenes_trabajo, repuestos, etc.\n-- You can paste the actual SQL from Supabase dashboard later.

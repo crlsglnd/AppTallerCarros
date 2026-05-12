@@ -6,7 +6,7 @@ class Cotizacion {
   final double costoManoObra;
   final String metodoPago;
   final double porcentajeRecargoTarjeta;
-  final double totalBase;
+  final double totalCalculado; // Cambiado de totalBase para coincidir con DB
   final String estado; // 'Pendiente', 'Aceptada', 'Declinada'
   final DateTime? createdAt;
   final List<CotizacionDetalle>? detalles;
@@ -17,7 +17,7 @@ class Cotizacion {
     this.costoManoObra = 0.0,
     this.metodoPago = 'Efectivo',
     this.porcentajeRecargoTarjeta = 0.0,
-    required this.totalBase,
+    required this.totalCalculado,
     this.estado = 'Pendiente',
     this.createdAt,
     this.detalles,
@@ -36,7 +36,7 @@ class Cotizacion {
       costoManoObra: (json['costo_mano_obra'] ?? 0).toDouble(),
       metodoPago: json['metodo_pago'] ?? 'Efectivo',
       porcentajeRecargoTarjeta: (json['porcentaje_recargo_tarjeta'] ?? 0).toDouble(),
-      totalBase: (json['total_base'] ?? json['total_calculado'] ?? 0).toDouble(),
+      totalCalculado: (json['total_calculado'] ?? 0).toDouble(),
       estado: json['estado'] ?? 'Pendiente',
       createdAt: json['created_at'] != null ? DateTime.parse(json['created_at']) : null,
       detalles: detalles,
@@ -49,7 +49,7 @@ class Cotizacion {
       'costo_mano_obra': costoManoObra,
       'metodo_pago': metodoPago,
       'porcentaje_recargo_tarjeta': porcentajeRecargoTarjeta,
-      'total_base': totalBase,
+      'total_calculado': totalCalculado,
       'estado': estado,
     };
   }

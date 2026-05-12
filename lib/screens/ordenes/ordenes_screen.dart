@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:app_taller_carros/widgets/app_drawer.dart';
 import 'package:app_taller_carros/models/orden_trabajo.dart';
 import 'package:app_taller_carros/models/vehiculo.dart';
+import 'package:app_taller_carros/models/cliente.dart';
+import 'package:app_taller_carros/models/configuracion_taller.dart';
 import 'package:app_taller_carros/services/supabase_service.dart';
 
 class OrdenesScreen extends StatefulWidget {
@@ -19,6 +21,10 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
   List<OrdenTrabajo> _allOrdenes = [];
   List<OrdenTrabajo> _filteredOrdenes = [];
   List<Vehiculo> _allVehiculos = [];
+  List<Cliente> _allClientes = [];
+  List<ConfiguracionTaller> _configuracion = [];
+  
+  Cliente? _clienteFiltro;
   Vehiculo? _vehiculoSeleccionado;
   DateTime _fechaSeleccionada = DateTime.now();
   String _estadoSeleccionado = 'Pendiente';
@@ -38,6 +44,8 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
       setState(() { _isLoading = true; _connectionError = null; });
       _allOrdenes = await _supabaseService.getOrdenes();
       _allVehiculos = await _supabaseService.getVehiculos();
+      _allClientes = await _supabaseService.getClientes();
+      _configuracion = await _supabaseService.getConfiguracion();
       _filteredOrdenes = _allOrdenes;
       setState(() { _isLoading = false; });
     } catch (e) {
@@ -45,11 +53,40 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
     }
   }
 
+  bool _esDiaPermitido(DateTime fecha) {
+    // 1. Validar contra configuración de días de semana
+    final diasSemana = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+    String nombreDia = diasSemana[fecha.weekday - 1];
+    
+    final configDia = _configuracion.firstWhere(
+      (c) => c.diaSemana == nombreDia,
+      orElse: () => ConfiguracionTaller(diaSemana: nombreDia, estaAbierto: true, maxIngresosDiarios: 10, horaApertura: '08:00', horaCierre: '17:00'),
+    );
+
+    if (!configDia.estaAbierto) return false;
+
+    // 2. Validar contra feriados (Lista estática o dinámica)
+    // Ejemplo de feriados comunes (puedes ampliar esta lista o usar una tabla en DB)
+    final feriados = [
+      DateTime(fecha.year, 1, 1),   // Año Nuevo
+      DateTime(fecha.year, 5, 1),   // Día del Trabajo
+      DateTime(fecha.year, 9, 15),  // Independencia
+      DateTime(fecha.year, 12, 25), // Navidad
+    ];
+
+    for (var f in feriados) {
+      if (fecha.day == f.day && fecha.month == f.month) return false;
+    }
+
+    return true;
+  }
+
   void _filterOrdenes() {
     final query = _searchController.text.toLowerCase();
     setState(() {
       _filteredOrdenes = _allOrdenes.where((o) {
-        return o.descripcion.toLowerCase().contains(query) || 
+        return (o.vehiculo?.placa.toLowerCase().contains(query) ?? false) || 
+               o.descripcion.toLowerCase().contains(query) || 
                o.estado.toLowerCase().contains(query);
       }).toList();
     });
@@ -61,11 +98,13 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
       _fechaSeleccionada = orden.fechaIngreso ?? DateTime.now();
       _estadoSeleccionado = orden.estado;
       _vehiculoSeleccionado = _allVehiculos.cast<Vehiculo?>().firstWhere((v) => v?.id == orden.vehiculoId, orElse: () => null);
+      _clienteFiltro = _allClientes.cast<Cliente?>().firstWhere((c) => c?.id == _vehiculoSeleccionado?.clienteId, orElse: () => null);
     } else {
       _descripcionController.clear();
       _fechaSeleccionada = DateTime.now();
       _estadoSeleccionado = 'Pendiente';
       _vehiculoSeleccionado = null;
+      _clienteFiltro = null;
     }
 
     showDialog(
@@ -73,19 +112,37 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            final vehiculosFiltrados = _clienteFiltro == null 
+                ? <Vehiculo>[] 
+                : _allVehiculos.where((v) => v.clienteId == _clienteFiltro!.id).toList();
+
             return AlertDialog(
               title: Text(orden == null ? 'Nueva Orden' : 'Editar Orden'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    DropdownButtonFormField<Vehiculo>(
-                      value: _vehiculoSeleccionado,
-                      decoration: const InputDecoration(labelText: 'Vehículo'),
-                      items: _allVehiculos.map((v) => DropdownMenuItem(value: v, child: Text(v.placa))).toList(),
-                      onChanged: (val) => setDialogState(() => _vehiculoSeleccionado = val),
+                    DropdownButtonFormField<Cliente>(
+                      value: _clienteFiltro != null ? _allClientes.firstWhere((c) => c.id == _clienteFiltro!.id) : null,
+                      decoration: const InputDecoration(labelText: 'Cliente'),
+                      items: _allClientes.map((c) => DropdownMenuItem(value: c, child: Text(c.nombre))).toList(),
+                      onChanged: (val) {
+                        setDialogState(() {
+                          _clienteFiltro = val;
+                          _vehiculoSeleccionado = null;
+                        });
+                      },
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<Vehiculo>(
+                      value: _vehiculoSeleccionado != null && vehiculosFiltrados.any((v) => v.id == _vehiculoSeleccionado!.id) 
+                          ? vehiculosFiltrados.firstWhere((v) => v.id == _vehiculoSeleccionado!.id) 
+                          : null,
+                      decoration: const InputDecoration(labelText: 'Vehículo'),
+                      items: vehiculosFiltrados.map((v) => DropdownMenuItem(value: v, child: Text(v.placa))).toList(),
+                      onChanged: _clienteFiltro == null ? null : (val) => setDialogState(() => _vehiculoSeleccionado = val),
+                    ),
+                    const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
                       value: _estadoSeleccionado,
                       decoration: const InputDecoration(labelText: 'Estado'),
@@ -106,10 +163,20 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
                         final picked = await showDatePicker(
                           context: context,
                           initialDate: _fechaSeleccionada,
-                          firstDate: DateTime(2020),
+                          firstDate: DateTime.now(), // No permitir fechas pasadas para nuevas órdenes
                           lastDate: DateTime(2100),
                         );
-                        if (picked != null) setDialogState(() => _fechaSeleccionada = picked);
+                        if (picked != null) {
+                          if (!_esDiaPermitido(picked)) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                              content: Text('⚠️ El taller está CERRADO o es FERIADO en esa fecha.'),
+                              backgroundColor: Colors.red,
+                            ));
+                          } else {
+                            setDialogState(() => _fechaSeleccionada = picked);
+                          }
+                        }
                       },
                     ),
                   ],
@@ -120,6 +187,12 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
                 ElevatedButton(
                   onPressed: () async {
                     if (_vehiculoSeleccionado != null && _descripcionController.text.isNotEmpty) {
+                      // Validar nuevamente al guardar
+                      if (!_esDiaPermitido(_fechaSeleccionada)) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se puede guardar: Taller cerrado.'), backgroundColor: Colors.red));
+                        return;
+                      }
+
                       try {
                         final o = OrdenTrabajo(
                           id: orden?.id,
@@ -189,7 +262,7 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Buscar por descripción o estado...',
+                hintText: 'Buscar por placa o estado...',
                 prefixIcon: const Icon(Icons.search, color: Colors.white70),
                 filled: true,
                 fillColor: Colors.white24,
@@ -227,7 +300,7 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
                         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                         child: ListTile(
                           leading: Icon(Icons.build, color: o.estado == 'Pendiente' ? Colors.orange : Colors.green),
-                          title: Text('Orden #${o.id?.substring(0,5) ?? 'N/A'}'),
+                          title: Text('Placa: ${o.vehiculo?.placa ?? 'N/A'} - #${o.id?.substring(0,5)}'),
                           subtitle: Text('${o.descripcion}\n${o.estado}'),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,

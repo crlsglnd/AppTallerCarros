@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:app_taller_carros/widgets/app_drawer.dart';
 import 'package:app_taller_carros/models/cotizacion.dart';
 import 'package:app_taller_carros/models/cotizacion_detalle.dart';
-import 'package:app_taller_carros/models/vehiculo.dart';
+import 'package:app_taller_carros/models/orden_trabajo.dart';
 import 'package:app_taller_carros/services/supabase_service.dart';
 
 class CotizacionesScreen extends StatefulWidget {
@@ -19,10 +19,14 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
   
   List<Cotizacion> _allCotizaciones = [];
   List<Cotizacion> _filteredCotizaciones = [];
-  Vehiculo? _vehiculoSeleccionado;
+  List<OrdenTrabajo> _allOrdenes = [];
+  
+  OrdenTrabajo? _ordenSeleccionada;
   final _repuestoNombreController = TextEditingController();
   final _repuestoCostoController = TextEditingController();
   final _manoObraController = TextEditingController();
+  final _recargoTarjetaController = TextEditingController(text: '0');
+  String _metodoPago = 'Efectivo';
   
   bool _isLoading = true;
   String? _connectionError;
@@ -38,6 +42,7 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
     try {
       setState(() { _isLoading = true; _connectionError = null; });
       _allCotizaciones = await _supabaseService.getCotizaciones();
+      _allOrdenes = await _supabaseService.getOrdenes();
       _filteredCotizaciones = _allCotizaciones;
       setState(() { _isLoading = false; });
     } catch (e) {
@@ -49,65 +54,118 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
     final query = _searchController.text.toLowerCase();
     setState(() {
       _filteredCotizaciones = _allCotizaciones.where((c) {
-        return c.id!.toLowerCase().contains(query) || 
+        return (c.vehiculo?.placa.toLowerCase().contains(query) ?? false) || 
                c.estado.toLowerCase().contains(query);
       }).toList();
     });
   }
 
-  void _mostrarDialogoCrearCotizacion() {
-    _detallesTemporales.clear();
-    _manoObraController.clear();
-    _vehiculoSeleccionado = null;
+  void _mostrarDialogoCotizacion({Cotizacion? cotizacion}) {
+    if (cotizacion != null) {
+      _detallesTemporales.clear();
+      if (cotizacion.detalles != null) _detallesTemporales.addAll(cotizacion.detalles!);
+      _manoObraController.text = cotizacion.costoManoObra.toString();
+      _recargoTarjetaController.text = cotizacion.porcentajeRecargoTarjeta.toString();
+      _metodoPago = cotizacion.metodoPago;
+      _ordenSeleccionada = _allOrdenes.cast<OrdenTrabajo?>().firstWhere((o) => o?.id == cotizacion.ordenTrabajoId, orElse: () => null);
+    } else {
+      _detallesTemporales.clear();
+      _manoObraController.clear();
+      _recargoTarjetaController.text = '0';
+      _metodoPago = 'Efectivo';
+      _ordenSeleccionada = null;
+    }
 
     showDialog(
       context: context,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            final ordenesDisponibles = _allOrdenes.where((o) => 
+                o.estado == 'Pendiente' || o.estado == 'En Progreso').toList();
+
+            double totalRepuestos = _detallesTemporales.fold(0, (sum, item) => sum + item.costo);
+            double manoObra = double.tryParse(_manoObraController.text) ?? 0;
+            double subtotal = totalRepuestos + manoObra;
+            double recargo = _metodoPago == 'Tarjeta' ? (subtotal * (double.tryParse(_recargoTarjetaController.text) ?? 0) / 100) : 0;
+            double totalFinal = subtotal + recargo;
+
             return AlertDialog(
-              title: const Text('Nueva Cotización'),
+              title: Text(cotizacion == null ? 'Nueva Cotización' : 'Editar Cotización'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    FutureBuilder<List<Vehiculo>>(
-                      future: _supabaseService.getVehiculos(),
-                      builder: (context, snapshot) {
-                        if (!snapshot.hasData) return const CircularProgressIndicator();
-                        return DropdownButtonFormField<Vehiculo>(
-                          decoration: const InputDecoration(labelText: 'Seleccionar Vehículo'),
-                          items: snapshot.data!.map((v) => DropdownMenuItem(value: v, child: Text(v.placa))).toList(),
-                          onChanged: (val) => setDialogState(() => _vehiculoSeleccionado = val),
-                        );
+                    DropdownButtonFormField<OrdenTrabajo>(
+                      value: _ordenSeleccionada != null && (ordenesDisponibles.any((o) => o.id == _ordenSeleccionada!.id) || cotizacion != null)
+                          ? _allOrdenes.firstWhere((o) => o.id == _ordenSeleccionada!.id)
+                          : null,
+                      decoration: const InputDecoration(labelText: 'Orden de Trabajo Activa'),
+                      items: (cotizacion == null ? ordenesDisponibles : _allOrdenes).map((o) => DropdownMenuItem(
+                        value: o,
+                        child: Text('${o.vehiculo?.placa ?? 'N/A'} - #${o.id?.substring(0,5)}'),
+                      )).toList(),
+                      onChanged: (val) => setDialogState(() => _ordenSeleccionada = val),
+                    ),
+                    const SizedBox(height: 16),
+                    // MÉTODO DE PAGO CORREGIDO
+                    DropdownButtonFormField<String>(
+                      value: _metodoPago,
+                      decoration: const InputDecoration(labelText: 'Método de Pago'),
+                      items: const [
+                        DropdownMenuItem(value: 'Efectivo', child: Text('Efectivo')),
+                        DropdownMenuItem(value: 'Tarjeta', child: Text('Tarjeta')),
+                      ],
+                      onChanged: (val) {
+                        setDialogState(() {
+                          _metodoPago = val!;
+                        });
                       },
                     ),
-                    TextField(controller: _manoObraController, decoration: const InputDecoration(labelText: 'Mano de Obra (\$)'), keyboardType: TextInputType.number),
+                    if (_metodoPago == 'Tarjeta')
+                      TextField(
+                        controller: _recargoTarjetaController,
+                        decoration: const InputDecoration(labelText: 'Recargo Tarjeta (%)'),
+                        keyboardType: TextInputType.number,
+                        onChanged: (_) => setDialogState(() {}),
+                      ),
+                    TextField(
+                      controller: _manoObraController,
+                      decoration: const InputDecoration(labelText: 'Mano de Obra (\$)'),
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setDialogState(() {}),
+                    ),
                     const Divider(),
-                    const Text('Agregar Repuesto:', style: TextStyle(fontWeight: FontWeight.bold)),
-                    TextField(controller: _repuestoNombreController, decoration: const InputDecoration(labelText: 'Nombre Repuesto')),
+                    const Text('Repuestos:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ..._detallesTemporales.asMap().entries.map((entry) => ListTile(
+                      title: Text(entry.value.descripcion),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('\$${entry.value.costo}'),
+                          IconButton(icon: const Icon(Icons.remove_circle, color: Colors.red), onPressed: () => setDialogState(() => _detallesTemporales.removeAt(entry.key))),
+                        ],
+                      ),
+                      dense: true,
+                    )),
                     Row(
                       children: [
-                        Expanded(child: TextField(controller: _repuestoCostoController, decoration: const InputDecoration(labelText: 'Costo (\$)'), keyboardType: TextInputType.number)),
-                        IconButton(
-                          icon: const Icon(Icons.add_circle, color: Colors.blue),
-                          onPressed: () {
-                            if (_repuestoNombreController.text.isNotEmpty && _repuestoCostoController.text.isNotEmpty) {
-                              setDialogState(() {
-                                _detallesTemporales.add(CotizacionDetalle(
-                                  descripcion: _repuestoNombreController.text,
-                                  costo: double.tryParse(_repuestoCostoController.text) ?? 0.0,
-                                ));
-                                _repuestoNombreController.clear();
-                                _repuestoCostoController.clear();
-                              });
-                            }
-                          },
-                        ),
+                        Expanded(child: TextField(controller: _repuestoNombreController, decoration: const InputDecoration(labelText: 'Nuevo Repuesto'))),
+                        const SizedBox(width: 8),
+                        Expanded(child: TextField(controller: _repuestoCostoController, decoration: const InputDecoration(labelText: 'Costo'), keyboardType: TextInputType.number)),
+                        IconButton(icon: const Icon(Icons.add_circle, color: Colors.blue), onPressed: () {
+                          if (_repuestoNombreController.text.isNotEmpty) {
+                            setDialogState(() {
+                              _detallesTemporales.add(CotizacionDetalle(descripcion: _repuestoNombreController.text, costo: double.tryParse(_repuestoCostoController.text) ?? 0));
+                              _repuestoNombreController.clear();
+                              _repuestoCostoController.clear();
+                            });
+                          }
+                        }),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    ..._detallesTemporales.map((d) => ListTile(title: Text(d.descripcion), trailing: Text('\$${d.costo}'), dense: true)),
+                    const Divider(),
+                    Text('Total: \$${totalFinal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue)),
                   ],
                 ),
               ),
@@ -115,16 +173,23 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
                 ElevatedButton(
                   onPressed: () async {
-                    if (_vehiculoSeleccionado != null) {
+                    if (_ordenSeleccionada != null) {
                       try {
-                        double subtotalRepuestos = _detallesTemporales.fold(0, (sum, item) => sum + item.costo);
-                        double manoObra = double.tryParse(_manoObraController.text) ?? 0;
                         final nuevaCot = Cotizacion(
-                          vehiculoId: _vehiculoSeleccionado!.id!,
+                          id: cotizacion?.id,
+                          vehiculoId: _ordenSeleccionada!.vehiculoId,
+                          ordenTrabajoId: _ordenSeleccionada!.id,
                           costoManoObra: manoObra,
-                          totalCalculado: subtotalRepuestos + manoObra,
+                          metodoPago: _metodoPago,
+                          porcentajeRecargoTarjeta: double.tryParse(_recargoTarjetaController.text) ?? 0,
+                          totalCalculado: totalFinal,
                         );
-                        await _supabaseService.insertCotizacion(nuevaCot, _detallesTemporales);
+                        if (cotizacion == null) {
+                          await _supabaseService.insertCotizacion(nuevaCot, _detallesTemporales);
+                        } else {
+                          await _supabaseService.deleteCotizacion(cotizacion.id!);
+                          await _supabaseService.insertCotizacion(nuevaCot, _detallesTemporales);
+                        }
                         if (!mounted) return;
                         Navigator.pop(context);
                         _loadData();
@@ -143,30 +208,34 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
     );
   }
 
-  void _confirmarEliminar(Cotizacion c) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Eliminar Cotización'),
-        content: const Text('¿Estás seguro de eliminar esta cotización?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-          TextButton(
-            onPressed: () async {
-              try {
-                await _supabaseService.deleteCotizacion(c.id!);
-                if (!mounted) return;
-                Navigator.pop(context);
-                _loadData();
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
-              }
-            },
-            child: const Text('Eliminar', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
+  void _cambiarEstado(Cotizacion c, String nuevoEstado) async {
+    try {
+      // 1. Cambiar estado de la cotización seleccionada
+      await _supabaseService.updateCotizacionEstado(c.id!, nuevoEstado);
+      
+      if (nuevoEstado == 'Aceptada') {
+        // 2. Si hay más cotizaciones pendientes para esta misma orden, se rechazan automáticamente
+        if (c.ordenTrabajoId != null) {
+          await _supabaseService.rechazarOtrasCotizaciones(c.ordenTrabajoId!, c.id!);
+          
+          // 3. Pasar la orden de trabajo a "En Progreso"
+          final orden = _allOrdenes.firstWhere((o) => o.id == c.ordenTrabajoId);
+          final ordenActualizada = OrdenTrabajo(
+            id: orden.id,
+            vehiculoId: orden.vehiculoId,
+            descripcion: orden.descripcion,
+            estado: 'En Progreso',
+            fechaIngreso: orden.fechaIngreso,
+          );
+          await _supabaseService.updateOrden(ordenActualizada);
+        }
+      }
+
+      _loadData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+    }
   }
 
   @override
@@ -181,7 +250,7 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Buscar cotización...',
+                hintText: 'Buscar por placa o estado...',
                 prefixIcon: const Icon(Icons.search, color: Colors.white70),
                 filled: true,
                 fillColor: Colors.white24,
@@ -218,20 +287,52 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
                       return Card(
                         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                         child: ExpansionTile(
-                          title: Text('Cotización #${cot.id?.substring(0,5)} - \$${cot.totalCalculado}'),
-                          subtitle: Text(cot.estado),
+                          leading: const Icon(Icons.request_quote, color: Colors.blue),
+                          title: Text('Placa: ${cot.vehiculo?.placa ?? 'N/A'} - \$${cot.totalCalculado.toStringAsFixed(2)}'),
+                          subtitle: Text('Estado: ${cot.estado} • ${cot.metodoPago}'),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _mostrarDialogoCotizacion(cotizacion: cot)),
+                              IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _supabaseService.deleteCotizacion(cot.id!).then((_) => _loadData())),
+                            ],
+                          ),
                           children: [
-                            if (cot.detalles != null)
-                              ...cot.detalles!.map((d) => ListTile(title: Text(d.descripcion), trailing: Text('\$${d.costo}'), dense: true)),
+                            const Divider(),
                             Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _confirmarEliminar(cot)),
+                                  Text('Mano de Obra: \$${cot.costoManoObra}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  if (cot.detalles != null)
+                                    ...cot.detalles!.map((d) => ListTile(title: Text(d.descripcion), trailing: Text('\$${d.costo}'), dense: true)),
+                                  if (cot.porcentajeRecargoTarjeta > 0)
+                                    Text('Recargo Tarjeta (${cot.porcentajeRecargoTarjeta}%): \$${(cot.totalCalculado - (cot.costoManoObra + cot.detalles!.fold(0, (s, i) => s + i.costo))).toStringAsFixed(2)}'),
                                 ],
                               ),
-                            )
+                            ),
+                            if (cot.estado == 'Pendiente')
+                              Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                  children: [
+                                    ElevatedButton.icon(
+                                      onPressed: () => _cambiarEstado(cot, 'Aceptada'),
+                                      icon: const Icon(Icons.check),
+                                      label: const Text('Aceptar'),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                    ),
+                                    ElevatedButton.icon(
+                                      onPressed: () => _cambiarEstado(cot, 'Declinada'),
+                                      icon: const Icon(Icons.close),
+                                      label: const Text('Rechazar'),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                    ),
+                                  ],
+                                ),
+                              ),
                           ],
                         ),
                       );
@@ -240,7 +341,7 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(onPressed: _mostrarDialogoCrearCotizacion, child: const Icon(Icons.add)),
+      floatingActionButton: FloatingActionButton(onPressed: () => _mostrarDialogoCotizacion(), child: const Icon(Icons.add)),
     );
   }
 }

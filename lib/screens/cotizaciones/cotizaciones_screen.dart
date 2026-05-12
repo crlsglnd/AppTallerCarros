@@ -86,9 +86,13 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
 
             double totalRepuestos = _detallesTemporales.fold(0, (sum, item) => sum + item.costo);
             double manoObra = double.tryParse(_manoObraController.text) ?? 0;
-            double subtotal = totalRepuestos + manoObra;
-            double recargo = _metodoPago == 'Tarjeta' ? (subtotal * (double.tryParse(_recargoTarjetaController.text) ?? 0) / 100) : 0;
-            double totalFinal = subtotal + recargo;
+            
+            // LOGICA FINANCIERA: Recargo solo sobre repuestos
+            double recargo = _metodoPago == 'Tarjeta' 
+                ? (totalRepuestos * (double.tryParse(_recargoTarjetaController.text) ?? 0) / 100) 
+                : 0;
+            
+            double totalFinal = totalRepuestos + manoObra + recargo;
 
             return AlertDialog(
               title: Text(cotizacion == null ? 'Nueva Cotización' : 'Editar Cotización'),
@@ -108,7 +112,6 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
                       onChanged: (val) => setDialogState(() => _ordenSeleccionada = val),
                     ),
                     const SizedBox(height: 16),
-                    // MÉTODO DE PAGO CORREGIDO
                     DropdownButtonFormField<String>(
                       value: _metodoPago,
                       decoration: const InputDecoration(labelText: 'Método de Pago'),
@@ -125,7 +128,7 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
                     if (_metodoPago == 'Tarjeta')
                       TextField(
                         controller: _recargoTarjetaController,
-                        decoration: const InputDecoration(labelText: 'Recargo Tarjeta (%)'),
+                        decoration: const InputDecoration(labelText: 'Recargo Tarjeta (% sobre repuestos)'),
                         keyboardType: TextInputType.number,
                         onChanged: (_) => setDialogState(() {}),
                       ),
@@ -183,10 +186,12 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
                           metodoPago: _metodoPago,
                           porcentajeRecargoTarjeta: double.tryParse(_recargoTarjetaController.text) ?? 0,
                           totalCalculado: totalFinal,
+                          estado: cotizacion?.estado ?? 'Pendiente', // MANTENER ESTADO ACTUAL SI SE EDITA
                         );
                         if (cotizacion == null) {
                           await _supabaseService.insertCotizacion(nuevaCot, _detallesTemporales);
                         } else {
+                          // Al editar, borramos y reinsertamos con el mismo ID para no perder la relación
                           await _supabaseService.deleteCotizacion(cotizacion.id!);
                           await _supabaseService.insertCotizacion(nuevaCot, _detallesTemporales);
                         }
@@ -210,25 +215,24 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
 
   void _cambiarEstado(Cotizacion c, String nuevoEstado) async {
     try {
-      // 1. Cambiar estado de la cotización seleccionada
       await _supabaseService.updateCotizacionEstado(c.id!, nuevoEstado);
       
-      if (nuevoEstado == 'Aceptada') {
-        // 2. Si hay más cotizaciones pendientes para esta misma orden, se rechazan automáticamente
-        if (c.ordenTrabajoId != null) {
-          await _supabaseService.rechazarOtrasCotizaciones(c.ordenTrabajoId!, c.id!);
-          
-          // 3. Pasar la orden de trabajo a "En Progreso"
-          final orden = _allOrdenes.firstWhere((o) => o.id == c.ordenTrabajoId);
-          final ordenActualizada = OrdenTrabajo(
-            id: orden.id,
-            vehiculoId: orden.vehiculoId,
-            descripcion: orden.descripcion,
-            estado: 'En Progreso',
-            fechaIngreso: orden.fechaIngreso,
-          );
-          await _supabaseService.updateOrden(ordenActualizada);
-        }
+      if (nuevoEstado == 'Aceptada' && c.ordenTrabajoId != null) {
+        final orden = _allOrdenes.firstWhere((o) => o.id == c.ordenTrabajoId);
+        final ordenActualizada = OrdenTrabajo(
+          id: orden.id,
+          vehiculoId: orden.vehiculoId,
+          descripcion: orden.descripcion,
+          estado: 'En Progreso',
+          fechaIngreso: orden.fechaIngreso,
+        );
+        await _supabaseService.updateOrden(ordenActualizada);
+        
+        // Rechazar otras cotizaciones de la misma orden
+        await _supabaseService.rechazarOtrasCotizaciones(c.ordenTrabajoId!, c.id!);
+        
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cotización Aceptada y Orden en curso.'), backgroundColor: Colors.green));
       }
 
       _loadData();
@@ -308,7 +312,7 @@ class _CotizacionesScreenState extends State<CotizacionesScreen> {
                                   if (cot.detalles != null)
                                     ...cot.detalles!.map((d) => ListTile(title: Text(d.descripcion), trailing: Text('\$${d.costo}'), dense: true)),
                                   if (cot.porcentajeRecargoTarjeta > 0)
-                                    Text('Recargo Tarjeta (${cot.porcentajeRecargoTarjeta}%): \$${(cot.totalCalculado - (cot.costoManoObra + cot.detalles!.fold(0, (s, i) => s + i.costo))).toStringAsFixed(2)}'),
+                                    Text('Recargo Tarjeta (${cot.porcentajeRecargoTarjeta}% sobre repuestos): \$${(cot.totalCalculado - (cot.costoManoObra + cot.detalles!.fold(0, (s, i) => s + i.costo))).toStringAsFixed(2)}'),
                                 ],
                               ),
                             ),

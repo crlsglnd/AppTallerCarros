@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:app_taller_carros/widgets/app_drawer.dart';
+import 'package:app_taller_carros/models/configuracion_taller.dart';
+import 'package:app_taller_carros/services/supabase_service.dart';
 
 class ConfiguracionScreen extends StatefulWidget {
   const ConfiguracionScreen({super.key});
@@ -9,41 +11,71 @@ class ConfiguracionScreen extends StatefulWidget {
 }
 
 class _ConfiguracionScreenState extends State<ConfiguracionScreen> {
-  final List<String> _dias = [
-    'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'
-  ];
+  final SupabaseService _supabaseService = SupabaseService();
+  
+  final _capacidadController = TextEditingController();
+  final _aperturaController = TextEditingController();
+  final _cierreController = TextEditingController();
 
-  void _editarHorarioDia(BuildContext context, String dia) {
+  void _editarHorarioDia(BuildContext context, ConfiguracionTaller config) {
+    _capacidadController.text = config.maxIngresosDiarios.toString();
+    _aperturaController.text = config.horaApertura;
+    _cierreController.text = config.horaCierre;
+    bool estaAbierto = config.estaAbierto;
+
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: Text('Configurar $dia'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SwitchListTile(
-                title: const Text('¿Taller abierto?'),
-                value: dia != 'Domingo', // Simulación
-                onChanged: (val) {},
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Configurar ${config.diaSemana}'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SwitchListTile(
+                      title: const Text('¿Taller abierto?'),
+                      value: estaAbierto,
+                      onChanged: (val) => setDialogState(() => estaAbierto = val),
+                    ),
+                    TextField(
+                      controller: _capacidadController,
+                      decoration: const InputDecoration(labelText: 'Ingresos Máximos'),
+                      keyboardType: TextInputType.number,
+                    ),
+                    Row(
+                      children: [
+                        Expanded(child: TextField(controller: _aperturaController, decoration: const InputDecoration(labelText: 'Apertura (HH:MM)'))),
+                        const SizedBox(width: 8),
+                        Expanded(child: TextField(controller: _cierreController, decoration: const InputDecoration(labelText: 'Cierre (HH:MM)'))),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-              const TextField(
-                decoration: InputDecoration(labelText: 'Ingresos Máximos'),
-                keyboardType: TextInputType.number,
-              ),
-              Row(
-                children: [
-                  Expanded(child: TextField(decoration: const InputDecoration(labelText: 'Apertura'))),
-                  const SizedBox(width: 8),
-                  Expanded(child: TextField(decoration: const InputDecoration(labelText: 'Cierre'))),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-            ElevatedButton(onPressed: () => Navigator.pop(context), child: const Text('Guardar')),
-          ],
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+                ElevatedButton(
+                  onPressed: () async {
+                    final updatedConfig = ConfiguracionTaller(
+                      id: config.id,
+                      diaSemana: config.diaSemana,
+                      maxIngresosDiarios: int.tryParse(_capacidadController.text) ?? 5,
+                      horaApertura: _aperturaController.text,
+                      horaCierre: _cierreController.text,
+                      estaAbierto: estaAbierto,
+                    );
+                    await _supabaseService.updateConfiguracionDia(updatedConfig);
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    setState(() {});
+                  },
+                  child: const Text('Guardar'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -54,22 +86,31 @@ class _ConfiguracionScreenState extends State<ConfiguracionScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Configuración del Taller')),
       drawer: const AppDrawer(),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _dias.length,
-        itemBuilder: (context, index) {
-          String dia = _dias[index];
-          bool isClosed = dia == 'Domingo';
-          return Card(
-            child: ListTile(
-              leading: Icon(Icons.calendar_today, color: isClosed ? Colors.grey : Colors.blue),
-              title: Text(dia, style: TextStyle(fontWeight: FontWeight.bold, color: isClosed ? Colors.grey : Colors.black)),
-              subtitle: Text(isClosed ? 'Cerrado' : '08:00 - 17:00 • Límite: 5'),
-              trailing: IconButton(
-                icon: const Icon(Icons.edit),
-                onPressed: () => _editarHorarioDia(context, dia),
-              ),
-            ),
+      body: FutureBuilder<List<ConfiguracionTaller>>(
+        future: _supabaseService.getConfiguracion(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
+          final list = snapshot.data ?? [];
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: list.length,
+            itemBuilder: (context, index) {
+              final config = list[index];
+              return Card(
+                child: ListTile(
+                  leading: Icon(Icons.calendar_today, color: config.estaAbierto ? Colors.blue : Colors.grey),
+                  title: Text(config.diaSemana, style: TextStyle(fontWeight: FontWeight.bold, color: config.estaAbierto ? Colors.black : Colors.grey)),
+                  subtitle: Text(config.estaAbierto 
+                    ? '${config.horaApertura} - ${config.horaCierre} • Límite: ${config.maxIngresosDiarios}'
+                    : 'Cerrado'),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: () => _editarHorarioDia(context, config),
+                  ),
+                ),
+              );
+            },
           );
         },
       ),

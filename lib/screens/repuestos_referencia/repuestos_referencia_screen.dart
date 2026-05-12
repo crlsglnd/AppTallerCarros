@@ -1,47 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:app_taller_carros/widgets/app_drawer.dart';
+import 'package:app_taller_carros/models/repuesto_referencia.dart';
+import 'package:app_taller_carros/services/supabase_service.dart';
 
-class RepuestosReferenciaScreen extends StatelessWidget {
+class RepuestosReferenciaScreen extends StatefulWidget {
   const RepuestosReferenciaScreen({super.key});
 
-  void _mostrarDialogoCrearReferencia(BuildContext context) {
+  @override
+  State<RepuestosReferenciaScreen> createState() => _RepuestosReferenciaScreenState();
+}
+
+class _RepuestosReferenciaScreenState extends State<RepuestosReferenciaScreen> {
+  final SupabaseService _supabaseService = SupabaseService();
+  final _nombreController = TextEditingController();
+  final _marcaController = TextEditingController();
+  final _modeloController = TextEditingController();
+  final _aniosController = TextEditingController();
+  final _precioController = TextEditingController();
+
+  void _mostrarDialogoCrearRepuesto(BuildContext context) {
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Nueva Referencia de Repuesto'),
+          title: const Text('Nuevo Repuesto de Referencia'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const TextField(
-                  decoration: InputDecoration(labelText: 'Nombre del repuesto'),
-                ),
-                const TextField(
-                  decoration: InputDecoration(labelText: 'Marca aplicable (Ej. Toyota)'),
-                ),
-                const TextField(
-                  decoration: InputDecoration(labelText: 'Modelo aplicable (Ej. Corolla)'),
-                ),
-                const TextField(
-                  decoration: InputDecoration(labelText: 'Años aplicables (Ej. 2015-2020)'),
-                ),
-                const TextField(
-                  decoration: InputDecoration(labelText: 'Valor Referencial (\$)'),
-                  keyboardType: TextInputType.number,
-                ),
+                TextField(controller: _nombreController, decoration: const InputDecoration(labelText: 'Nombre')),
+                TextField(controller: _marcaController, decoration: const InputDecoration(labelText: 'Marca')),
+                TextField(controller: _modeloController, decoration: const InputDecoration(labelText: 'Modelo')),
+                TextField(controller: _aniosController, decoration: const InputDecoration(labelText: 'Años (ej. 2010-2015)')),
+                TextField(controller: _precioController, decoration: const InputDecoration(labelText: 'Precio Referencial'), keyboardType: TextInputType.number),
               ],
             ),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
             ElevatedButton(
-              onPressed: () {
-                // TODO: Guardar en Supabase
-                Navigator.pop(context);
+              onPressed: () async {
+                if (_nombreController.text.isNotEmpty) {
+                  final r = RepuestoReferencia(
+                    nombre: _nombreController.text,
+                    marcaAplicable: _marcaController.text,
+                    modeloAplicable: _modeloController.text,
+                    aniosAplicables: _aniosController.text,
+                    precioReferencia: double.tryParse(_precioController.text) ?? 0.0,
+                  );
+                  await _supabaseService.insertRepuestoReferencia(r);
+                  _nombreController.clear();
+                  _marcaController.clear();
+                  _modeloController.clear();
+                  _aniosController.clear();
+                  _precioController.clear();
+                  Navigator.pop(context);
+                  setState(() {});
+                }
               },
               child: const Text('Guardar'),
             ),
@@ -54,24 +69,32 @@ class RepuestosReferenciaScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Base de Repuestos')),
+      appBar: AppBar(title: const Text('Ref. Repuestos')),
       drawer: const AppDrawer(),
-      body: ListView.builder(
-        itemCount: 2, // Simulando datos
-        itemBuilder: (context, index) {
-          return ListTile(
-            leading: const CircleAvatar(child: Icon(Icons.settings)),
-            title: Text(index == 0 ? 'Filtro de Aceite' : 'Pastillas de Freno'),
-            subtitle: Text(index == 0 ? 'Toyota Corolla (2015-2020)' : 'Honda Civic (2018-2022)'),
-            trailing: Text(
-              '\$${index == 0 ? 15.00 : 45.00}',
-              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
-            ),
+      body: FutureBuilder<List<RepuestoReferencia>>(
+        future: _supabaseService.getRepuestosReferencia(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          final list = snapshot.data!;
+          return ListView.builder(
+            itemCount: list.length,
+            itemBuilder: (context, index) {
+              final r = list[index];
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: ListTile(
+                  leading: const Icon(Icons.settings_applications),
+                  title: Text(r.nombre),
+                  subtitle: Text('${r.marcaAplicable} ${r.modeloAplicable} (${r.aniosAplicables})'),
+                  trailing: Text('\$${r.precioReferencia.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              );
+            },
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _mostrarDialogoCrearReferencia(context),
+        onPressed: () => _mostrarDialogoCrearRepuesto(context),
         child: const Icon(Icons.add),
       ),
     );
